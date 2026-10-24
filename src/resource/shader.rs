@@ -1,7 +1,5 @@
 use std::{fs, path::PathBuf, time::SystemTime};
 
-/// WGSL-шейдер на диске + общий common.wgsl. Если файла нет — берется встроенная копия.
-/// Сама компиляция/пересоздание пайплайна — в Renderer (нужен device).
 pub struct ShaderFile {
     main: PathBuf,
     common: PathBuf,
@@ -26,7 +24,6 @@ impl ShaderFile {
         self.newest() != self.stamp
     }
 
-    /// common.wgsl + сам шейдер. Запоминает mtime (даже если потом компиляция упадет — без спама).
     pub fn read(&mut self) -> String {
         self.stamp = self.newest();
         let common = fs::read_to_string(&self.common).unwrap_or_else(|_| self.fallback_common.to_owned());

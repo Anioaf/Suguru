@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable};
-use glam::Vec3;
 use wgpu::util::DeviceExt;
 
 use super::{Camera, FontAtlas, Gfx, TextBatch};
 use crate::engine::Config;
+use crate::game::map::PALETTE_SIDE;
 use crate::game::{World, WORLD_HEIGHT, WORLD_WIDTH};
 use crate::resource::{GpuTexture, ShaderFile};
 
@@ -12,16 +12,13 @@ const COMMON_WGSL: &str = include_str!("../../content/gfx/FX/common.wgsl");
 const MAP_WGSL: &str = include_str!("../../content/gfx/FX/map.wgsl");
 const TEXT_WGSL: &str = include_str!("../../content/gfx/FX/text.wgsl");
 
-/// Все, что нужно для одного кадра (аналог render view в Source 2).
 pub struct FrameParams<'a> {
     pub camera: &'a Camera,
     pub size: (u32, u32),
     pub time: f32,
-    /// None — ничего не выбрано
-    pub selected_rgb: Option<Vec3>,
+    pub selected: Option<u32>,
 }
 
-/// Должен совпадать с `FrameUniform` в common.wgsl.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct FrameUniform {
@@ -48,6 +45,7 @@ pub struct Renderer {
     quad_vb: wgpu::Buffer,
     quad_ib: wgpu::Buffer,
     labels: TextBatch,
+    palette: GpuTexture,
     last_poll: f64,
 }
 
@@ -57,6 +55,19 @@ fn tex_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
         visibility: wgpu::ShaderStages::FRAGMENT,
         ty: wgpu::BindingType::Texture {
             sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
+fn uint_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Uint,
             view_dimension: wgpu::TextureViewDimension::D2,
             multisampled: false,
         },
@@ -82,6 +93,7 @@ fn make_pipeline(
     stride: u64,
     attrs: &[wgpu::VertexAttribute],
     cull: Option<wgpu::Face>,
+    blend: Option<wgpu::BlendState>,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
@@ -100,22 +112,16 @@ fn make_pipeline(
             module,
             entry_point: "fs_main",
             compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
+            targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
         }),
         primitive: wgpu::PrimitiveState { cull_mode: cull, ..Default::default() },
-        depth_stencil: None, // всё лежит в плоскости z=0 — depth-буфер не нужен
+        depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
         multiview: None,
         cache: None,
     })
 }
 
-/// Компилирует шейдер и строит пайплайн. Ошибки валидации перехватываются error-scope'ом:
-/// битый шейдер не роняет движок, остается предыдущий пайплайн.
 fn try_build(
     device: &wgpu::Device,
     label: &str,
@@ -141,18 +147,42 @@ fn try_build(
     }
 }
 
+fn build_map(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    m: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    make_pipeline(device, "map", layout, m, format, 20, &MAP_ATTRS, Some(wgpu::Face::Back), None)
+}
+
+fn build_text(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    m: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    make_pipeline(device, "text", layout, m, format, 16, &TEXT_ATTRS, None, Some(wgpu::BlendState::ALPHA_BLENDING))
+}
+
 impl Renderer {
     pub fn new(gfx: &Gfx, cfg: &Config, world: &World) -> Result<Self> {
         let (device, queue) = (&gfx.device, &gfx.queue);
         let format = gfx.config.format;
 
-        // ── ресурсы ──
         let m = &world.map;
         let tex_norm = GpuTexture::from_file(device, queue, &cfg.path("map/normal.bmp"), true)?;
-        let tex_height = GpuTexture::from_file(device, queue, &cfg.path("map/heightmap.bmp"), true)?;
-        let tex_prov = GpuTexture::from_rgb8(device, queue, m.width, m.height, &m.rgb, false, "provinces");
-        let state_img = m.owner_color_image(&world.country_colors);
-        let tex_state = GpuTexture::from_rgb8(device, queue, m.width, m.height, &state_img, false, "states");
+        let tex_height = GpuTexture::from_file_gray(device, queue, &cfg.path("map/heightmap.bmp"), true)?;
+        let tex_prov = GpuTexture::from_r16_uint(device, queue, m.width, m.height, &m.province_ids, "provinces");
+        let palette = GpuTexture::from_rgba8(
+            device,
+            queue,
+            PALETTE_SIDE,
+            PALETTE_SIDE,
+            &m.owner_palette(&world.country_colors),
+            false,
+            "palette",
+        );
 
         let font_path = cfg.find_font().context("не найден ни один шрифт (см. Config::font_candidates)")?;
         let font = FontAtlas::load(device, queue, &font_path, cfg.font_px)?;
@@ -165,7 +195,6 @@ impl Renderer {
         }
         let labels = TextBatch::new(device, &verts);
 
-        // ── сэмплеры ──
         let smp_linear = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("linear repeat"),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -176,12 +205,6 @@ impl Renderer {
             anisotropy_clamp: 4,
             ..Default::default()
         });
-        let smp_nearest = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("nearest repeat"),
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            ..Default::default()
-        });
         let smp_text = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("text"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -190,7 +213,6 @@ impl Renderer {
             ..Default::default()
         });
 
-        // ── uniform + bind groups ──
         let frame_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame uniform"),
             size: std::mem::size_of::<FrameUniform>() as u64,
@@ -219,7 +241,7 @@ impl Renderer {
 
         let map_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("map bgl"),
-            entries: &[tex_entry(0), tex_entry(1), tex_entry(2), tex_entry(3), smp_entry(4), smp_entry(5)],
+            entries: &[tex_entry(0), tex_entry(1), uint_entry(2), tex_entry(3), smp_entry(4)],
         });
         let map_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("map bg"),
@@ -228,9 +250,8 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&tex_norm.view) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&tex_height.view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&tex_prov.view) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&tex_state.view) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&palette.view) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&smp_linear) },
-                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&smp_nearest) },
             ],
         });
 
@@ -258,9 +279,8 @@ impl Renderer {
             push_constant_ranges: &[],
         });
 
-        // ── геометрия ──
         #[rustfmt::skip]
-        let verts: [f32; 20] = [
+        let quad: [f32; 20] = [
             0.0,         0.0,          0.0, 0.0, 0.0,
             WORLD_WIDTH, 0.0,          0.0, 1.0, 0.0,
             WORLD_WIDTH, WORLD_HEIGHT, 0.0, 1.0, 1.0,
@@ -269,7 +289,7 @@ impl Renderer {
         let indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
         let quad_vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("quad vb"),
-            contents: bytemuck::cast_slice(&verts),
+            contents: bytemuck::cast_slice(&quad),
             usage: wgpu::BufferUsages::VERTEX,
         });
         let quad_ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -278,27 +298,26 @@ impl Renderer {
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        // ── шейдеры ──
         let fx = |n: &str| cfg.path(&format!("gfx/FX/{n}"));
         let mut map_file = ShaderFile::new(fx("map.wgsl"), fx("common.wgsl"), MAP_WGSL, COMMON_WGSL);
         let mut text_file = ShaderFile::new(fx("text.wgsl"), fx("common.wgsl"), TEXT_WGSL, COMMON_WGSL);
 
-        let map_pipeline = try_build(device, "map", &mut map_file, |m| {
-            make_pipeline(device, "map", &map_layout, m, format, 20, &MAP_ATTRS, Some(wgpu::Face::Back))
-        })
-        .context("map.wgsl не скомпилировался (см. лог выше)")?;
-        let text_pipeline = try_build(device, "text", &mut text_file, |m| {
-            make_pipeline(device, "text", &text_layout, m, format, 16, &TEXT_ATTRS, None)
-        })
-        .context("text.wgsl не скомпилировался (см. лог выше)")?;
+        let map_pipeline = try_build(device, "map", &mut map_file, |m| build_map(device, &map_layout, m, format))
+            .context("map.wgsl не скомпилировался (см. лог выше)")?;
+        let text_pipeline = try_build(device, "text", &mut text_file, |m| build_text(device, &text_layout, m, format))
+            .context("text.wgsl не скомпилировался (см. лог выше)")?;
 
         Ok(Self {
             format, map_file, text_file, map_layout, text_layout, map_pipeline, text_pipeline,
-            frame_buf, frame_bg, map_bg, text_bg, quad_vb, quad_ib, labels, last_poll: 0.0,
+            frame_buf, frame_bg, map_bg, text_bg, quad_vb, quad_ib, labels, palette, last_poll: 0.0,
         })
     }
 
-    /// Автоперезагрузка WGSL по mtime (раз в 250 мс) или принудительно по F10.
+    #[allow(dead_code)]
+    pub fn update_palette(&self, queue: &wgpu::Queue, rgba: &[u8]) {
+        self.palette.write_rgba8(queue, PALETTE_SIDE, PALETTE_SIDE, rgba);
+    }
+
     pub fn poll_hot_reload(&mut self, device: &wgpu::Device, now: f64, force: bool) {
         if !force && now - self.last_poll < 0.25 {
             return;
@@ -308,17 +327,13 @@ impl Renderer {
 
         if force || self.map_file.changed() {
             let layout = &self.map_layout;
-            if let Some(p) = try_build(device, "map", &mut self.map_file, |m| {
-                make_pipeline(device, "map", layout, m, format, 20, &MAP_ATTRS, Some(wgpu::Face::Back))
-            }) {
+            if let Some(p) = try_build(device, "map", &mut self.map_file, |m| build_map(device, layout, m, format)) {
                 self.map_pipeline = p;
             }
         }
         if force || self.text_file.changed() {
             let layout = &self.text_layout;
-            if let Some(p) = try_build(device, "text", &mut self.text_file, |m| {
-                make_pipeline(device, "text", layout, m, format, 16, &TEXT_ATTRS, None)
-            }) {
+            if let Some(p) = try_build(device, "text", &mut self.text_file, |m| build_text(device, layout, m, format)) {
                 self.text_pipeline = p;
             }
         }
@@ -327,7 +342,7 @@ impl Renderer {
     pub fn render(&self, device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::TextureView, p: &FrameParams) {
         let aspect = p.size.0 as f32 / p.size.1 as f32;
         let vp = p.camera.proj(aspect) * p.camera.view();
-        let sel = p.selected_rgb.map_or([0.0; 4], |c| [c.x, c.y, c.z, 1.0]);
+        let sel = p.selected.map_or([0.0; 4], |id| [id as f32, 0.0, 0.0, 1.0]);
         let u = FrameUniform {
             view_proj: vp.to_cols_array_2d(),
             selected: sel,
@@ -354,14 +369,12 @@ impl Renderer {
 
             pass.set_bind_group(0, &self.frame_bg, &[]);
 
-            // карта: 3 копии мира одним instanced draw-call'ом
             pass.set_pipeline(&self.map_pipeline);
             pass.set_bind_group(1, &self.map_bg, &[]);
             pass.set_vertex_buffer(0, self.quad_vb.slice(..));
             pass.set_index_buffer(self.quad_ib.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..6, 0, 0..3);
 
-            // подписи: тоже 3 инстанса
             if self.labels.count > 0 {
                 pass.set_pipeline(&self.text_pipeline);
                 pass.set_bind_group(1, &self.text_bg, &[]);

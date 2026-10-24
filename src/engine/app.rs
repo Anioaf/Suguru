@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use glam::{Vec2, Vec3};
+use glam::Vec2;
 use std::{sync::Arc, time::Instant};
 use winit::{
     application::ApplicationHandler,
@@ -14,7 +14,6 @@ use super::{Config, Input};
 use crate::game::{World, WORLD_HEIGHT, WORLD_WIDTH};
 use crate::render::{Camera, FrameParams, Gfx, Renderer};
 
-/// GPU-часть приложения. Порядок полей = порядок drop: renderer → gfx → window.
 struct Gpu {
     renderer: Renderer,
     gfx: Gfx,
@@ -33,7 +32,6 @@ struct App {
 }
 
 pub fn run(cfg: Config) -> Result<()> {
-    // Данные грузим ДО создания окна: ошибки контента видны сразу, а парсинг идет параллельно.
     log::info!("content root: {}", cfg.content_root.display());
     let world = World::load(&cfg)?;
     let mut app = App {
@@ -86,7 +84,7 @@ impl App {
         let size = gpu.window.inner_size();
         if size.width == 0 || size.height == 0 {
             self.input.end_frame();
-            return; // свернуто
+            return;
         }
 
         if self.input.clicked() {
@@ -100,9 +98,16 @@ impl App {
         }
         self.input.end_frame();
 
-        let Some(frame) = gpu.gfx.acquire() else { return };
+        let frame = match gpu.gfx.acquire() {
+            Ok(Some(f)) => f,
+            Ok(None) => return,
+            Err(e) => {
+                self.error = Some(e);
+                el.exit();
+                return;
+            }
+        };
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sel = &self.world.selection;
         gpu.renderer.render(
             &gpu.gfx.device,
             &gpu.gfx.queue,
@@ -111,7 +116,7 @@ impl App {
                 camera: &self.camera,
                 size: (size.width, size.height),
                 time: now as f32,
-                selected_rgb: sel.province.map(|_| -> Vec3 { sel.rgb }),
+                selected: self.world.selection.province,
             },
         );
         frame.present();
@@ -146,8 +151,13 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
-        if let Some(g) = &self.gpu {
+    fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        let Some(g) = &self.gpu else { return };
+        let s = g.window.inner_size();
+        if s.width == 0 || s.height == 0 || g.window.is_minimized().unwrap_or(false) {
+            el.set_control_flow(ControlFlow::Wait);
+        } else {
+            el.set_control_flow(ControlFlow::Poll);
             g.window.request_redraw();
         }
     }

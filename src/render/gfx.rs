@@ -1,8 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use std::sync::Arc;
 use winit::window::Window;
 
-/// Контекст GPU: instance/surface/device/queue (аналог RenderDevice в Source 2).
 pub struct Gfx {
     pub surface: wgpu::Surface<'static>,
     pub device: wgpu::Device,
@@ -30,14 +29,12 @@ impl Gfx {
             &wgpu::DeviceDescriptor {
                 label: Some("aegis device"),
                 required_features: wgpu::Features::empty(),
-                // карта 5632 px шире дефолтных лимитов "downlevel" — берем разрешение от адаптера
-                required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
+                required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
                 memory_hints: wgpu::MemoryHints::default(),
             },
             None,
         ))?;
 
-        // Оригинал рисовал в НЕ-sRGB framebuffer — выбираем линейный формат, чтобы цвета совпали.
         let caps = surface.get_capabilities(&adapter);
         let format = caps
             .formats
@@ -70,18 +67,15 @@ impl Gfx {
         self.surface.configure(&self.device, &self.config);
     }
 
-    pub fn acquire(&mut self) -> Option<wgpu::SurfaceTexture> {
+    pub fn acquire(&mut self) -> Result<Option<wgpu::SurfaceTexture>> {
         match self.surface.get_current_texture() {
-            Ok(t) => Some(t),
+            Ok(t) => Ok(Some(t)),
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                 self.surface.configure(&self.device, &self.config);
-                None
+                Ok(None)
             }
-            Err(wgpu::SurfaceError::Timeout) => None,
-            Err(e) => {
-                log::error!("surface error: {e}");
-                None
-            }
+            Err(wgpu::SurfaceError::Timeout) => Ok(None),
+            Err(e) => Err(anyhow!("surface error: {e}")),
         }
     }
 }
