@@ -12,7 +12,6 @@ pub struct Input {
 }
 
 impl Input {
-    /// Вызывать в конце кадра: сбрасывает «одноразовые» события.
     pub fn end_frame(&mut self) {
         self.pressed.clear();
         self.click = false;

@@ -1,8 +1,16 @@
-use super::{map::MapData, parsers, Tag, WORLD_HEIGHT, WORLD_WIDTH};
-use crate::engine::Config;
+use super::{
+    hash::StateHasher,
+    map::MapData,
+    parsers,
+    sim::{Command, Simulation},
+    Tag, WORLD_HEIGHT, WORLD_WIDTH,
+};
 use anyhow::{ensure, Result};
 use glam::Vec2;
 use rustc_hash::FxHashMap;
+use std::{path::Path, time::Duration};
+
+const CHECKSUM_INTERVAL: u64 = 720;
 
 pub struct CountryLabel {
     #[allow(dead_code)]
@@ -23,6 +31,7 @@ pub struct World {
     pub country_colors: FxHashMap<Tag, [u8; 3]>,
     pub labels: Vec<CountryLabel>,
     pub selection: Selection,
+    pub sim: Simulation,
 }
 
 fn or_default<T: Default>(r: Result<T>, what: &str) -> T {
@@ -32,9 +41,9 @@ fn or_default<T: Default>(r: Result<T>, what: &str) -> T {
     })
 }
 
-fn load_owners(cfg: &Config) -> FxHashMap<u32, Tag> {
+fn load_owners(root: &Path) -> FxHashMap<u32, Tag> {
     for dir in ["history/states", "history/state"] {
-        let path = cfg.path(dir);
+        let path = root.join(dir);
         if path.is_dir() {
             return or_default(parsers::load_states(&path), "states");
         }
@@ -44,21 +53,21 @@ fn load_owners(cfg: &Config) -> FxHashMap<u32, Tag> {
 }
 
 impl World {
-    pub fn load(cfg: &Config) -> Result<Self> {
+    pub fn load(root: &Path, language: &str) -> Result<Self> {
         let ((defs, owners), (country_colors, (parties, loc))) = rayon::join(
             || {
                 rayon::join(
-                    || parsers::load_definitions(&cfg.path("map/definition.csv")),
-                    || load_owners(cfg),
+                    || parsers::load_definitions(&root.join("map/definition.csv")),
+                    || load_owners(root),
                 )
             },
             || {
                 rayon::join(
-                    || or_default(parsers::load_country_colors(&cfg.path("common/countries/colors.txt")), "country colors"),
+                    || or_default(parsers::load_country_colors(&root.join("common/countries/colors.txt")), "country colors"),
                     || {
                         rayon::join(
-                            || or_default(parsers::load_country_parties(&cfg.path("history/countries")), "country history"),
-                            || or_default(parsers::load_localization(&cfg.path("localisation"), &cfg.language), "localisation"),
+                            || or_default(parsers::load_country_parties(&root.join("history/countries")), "country history"),
+                            || or_default(parsers::load_localization(&root.join("localisation"), language), "localisation"),
                         )
                     },
                 )
@@ -66,7 +75,7 @@ impl World {
         );
         let defs = defs?;
 
-        let map = MapData::load(&cfg.path("map/provinces.bmp"), &defs, &owners)?;
+        let map = MapData::load(&root.join("map/provinces.bmp"), &defs, &owners)?;
         ensure!(
             (map.width as f32 / map.height as f32 - WORLD_WIDTH / WORLD_HEIGHT).abs() < 1e-3,
             "размер карты {}x{} не соответствует WORLD_WIDTH/WORLD_HEIGHT",
@@ -74,9 +83,42 @@ impl World {
             map.height
         );
         let labels = Self::build_labels(&map, &parties, &loc);
+        let sim = Simulation::new(&map.owner);
         log::info!("world loaded: {} provinces, {} labels", defs.len(), labels.len());
 
-        Ok(Self { map, country_colors, labels, selection: Selection::default() })
+        Ok(Self { map, country_colors, labels, selection: Selection::default(), sim })
+    }
+
+    pub fn size(&self) -> Vec2 {
+        Vec2::new(WORLD_WIDTH, WORLD_HEIGHT)
+    }
+
+    pub fn submit(&mut self, cmd: Command) {
+        self.sim.submit(cmd);
+    }
+
+    pub fn advance(&mut self, dt: Duration) {
+        let before = self.sim.tick();
+        self.sim.advance(dt);
+        let after = self.sim.tick();
+        if after / CHECKSUM_INTERVAL != before / CHECKSUM_INTERVAL {
+            log::info!("tick {} {} checksum {:016x}", after, self.sim.date(), self.checksum());
+        }
+    }
+
+    pub fn checksum(&self) -> u64 {
+        let mut h = StateHasher::new();
+        for o in &self.map.owner {
+            match o {
+                Some(t) => {
+                    h.u8(1);
+                    h.bytes(t.as_str().as_bytes());
+                }
+                None => h.u8(0),
+            }
+        }
+        self.sim.hash_into(&mut h);
+        h.finish()
     }
 
     fn build_labels(

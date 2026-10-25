@@ -1,0 +1,28 @@
+   Compiling Suguru v0.1.0 (C:\Users\Meerwe\Desktop\suguru)
+    Finished `release` profile [optimized] target(s) in 32.66s
+     Running `target\release\Suguru.exe`
+[2026-10-25T05:51:09Z INFO  Suguru::engine::app] content root: C:\Users\Meerwe\Desktop\suguru\target\release
+[2026-10-25T05:51:09Z ERROR Suguru::game::world] country history: read_dir C:\Users\Meerwe\Desktop\suguru\target\release\history/countries: Системе не удается найти указанный путь. (os error 3)
+[2026-10-25T05:51:09Z ERROR Suguru::game::world] localisation: read_dir C:\Users\Meerwe\Desktop\suguru\target\release\localisation\russian: Системе не удается найти указанный путь. (os error 3)
+[2026-10-25T05:51:09Z INFO  Suguru::game::world] world loaded: 13414 provinces, 1 labels
+[2026-10-25T05:51:09Z INFO  Suguru::render::gfx] GPU: NVIDIA GeForce RTX 2060 SUPER (Vulkan)
+[2026-10-25T05:51:10Z INFO  Suguru::render::text] font atlas 2048x512, 351 glyphs
+[2026-10-25T05:51:10Z INFO  Suguru::render::renderer] shader 'map' (re)loaded
+[2026-10-25T05:51:10Z INFO  Suguru::render::renderer] shader 'text' (re)loaded
+[2026-10-25T05:51:11Z INFO  Suguru::engine::app] Suguru | fps 300 | avg 3.34 max 7.59 мс | cpu 0.00 acq 0.01 render 0.22
+[2026-10-25T05:51:12Z INFO  Suguru::engine::app] Suguru | fps 300 | avg 3.33 max 3.72 мс | cpu 0.00 acq 0.02 render 0.24
+[2026-10-25T05:51:13Z INFO  Suguru::engine::app] Suguru | fps 107 | avg 9.32 max 369.22 мс | cpu 0.00 acq 0.02 render 0.25
+[2026-10-25T05:51:14Z INFO  Suguru::engine::app] Suguru | fps 112 | avg 8.94 max 869.95 мс | cpu 0.00 acq 0.02 render 0.38
+[2026-10-25T05:51:14Z INFO  Suguru::game::world] selected province 12088, owner None
+[2026-10-25T05:51:14Z INFO  Suguru::game::world] selected province 5004, owner None
+[2026-10-25T05:51:15Z INFO  Suguru::engine::app] Suguru | fps 301 | avg 3.32 max 3.79 мс | cpu 0.00 acq 0.02 render 0.23
+[2026-10-25T05:51:16Z INFO  Suguru::engine::app] Suguru | fps 300 | avg 3.33 max 3.64 мс | cpu 0.00 acq 0.02 render 0.21
+[2026-10-25T05:51:17Z INFO  Suguru::engine::app] Suguru | fps 300 | avg 3.33 max 3.89 мс | cpu 0.00 acq 0.02 render 0.21
+[2026-10-25T05:51:18Z INFO  Suguru::engine::app] Suguru | fps 300 | avg 3.33 max 3.74 мс | cpu 0.00 acq 0.02 render 0.22
+[2026-10-25T05:51:19Z INFO  Suguru::engine::app] Suguru | fps 300 | avg 3.33 max 3.74 мс | cpu 0.00 acq 0.01 render 0.21
+[2026-10-25T05:51:20Z INFO  Suguru::engine::app] Suguru | fps 300 | avg 3.33 max 3.81 мс | cpu 0.00 acq 0.01 render 0.21
+[2026-10-25T05:51:21Z INFO  Suguru::game::world] selected province 3568, owner None
+[2026-10-25T05:51:21Z INFO  Suguru::engine::app] Suguru | fps 300 | avg 3.33 max 3.87 мс | cpu 0.00 acq 0.02 render 0.23
+[2026-10-25T05:51:21Z INFO  Suguru::game::world] selected province 3568, owner None
+[2026-10-25T05:51:21Z INFO  Suguru::game::world] selected province 310, owner None
+[2026-10-25T05:51:22Z INFO  Suguru::engine::app] Suguru | fps 300 | avg 3.33 max 3.94 мс | cpu 0.00 acq 0.02 render 0.26

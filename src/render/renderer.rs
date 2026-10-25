@@ -1,16 +1,34 @@
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use bytemuck::{Pod, Zeroable};
+use glam::Vec2;
+use std::path::Path;
 use wgpu::util::DeviceExt;
 
 use super::{Camera, FontAtlas, Gfx, TextBatch};
-use crate::engine::Config;
-use crate::game::map::PALETTE_SIDE;
-use crate::game::{World, WORLD_HEIGHT, WORLD_WIDTH};
 use crate::resource::{GpuTexture, ShaderFile};
 
 const COMMON_WGSL: &str = include_str!("../../content/gfx/FX/common.wgsl");
 const MAP_WGSL: &str = include_str!("../../content/gfx/FX/map.wgsl");
 const TEXT_WGSL: &str = include_str!("../../content/gfx/FX/text.wgsl");
+
+pub const PALETTE_SIDE: u32 = 256;
+
+pub struct LabelRef<'a> {
+    pub text: &'a str,
+    pub pos: Vec2,
+    pub size: f32,
+}
+
+pub struct SceneDesc<'a> {
+    pub content_root: &'a Path,
+    pub font_path: &'a Path,
+    pub font_px: f32,
+    pub world_size: Vec2,
+    pub map_size: (u32, u32),
+    pub province_ids: &'a [u16],
+    pub palette: Vec<u8>,
+    pub labels: Vec<LabelRef<'a>>,
+}
 
 pub struct FrameParams<'a> {
     pub camera: &'a Camera,
@@ -32,6 +50,7 @@ const TEXT_ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![0 => Flo
 
 pub struct Renderer {
     format: wgpu::TextureFormat,
+    world_size: Vec2,
     map_file: ShaderFile,
     text_file: ShaderFile,
     map_layout: wgpu::PipelineLayout,
@@ -166,32 +185,38 @@ fn build_text(
 }
 
 impl Renderer {
-    pub fn new(gfx: &Gfx, cfg: &Config, world: &World) -> Result<Self> {
+    pub fn new(gfx: &Gfx, scene: &SceneDesc) -> Result<Self> {
         let (device, queue) = (&gfx.device, &gfx.queue);
         let format = gfx.config.format;
+        let root = scene.content_root;
+        let (map_w, map_h) = scene.map_size;
 
-        let m = &world.map;
-        let tex_norm = GpuTexture::from_file(device, queue, &cfg.path("map/normal.bmp"), true)?;
-        let tex_height = GpuTexture::from_file_gray(device, queue, &cfg.path("map/heightmap.bmp"), true)?;
-        let tex_prov = GpuTexture::from_r16_uint(device, queue, m.width, m.height, &m.province_ids, "provinces");
-        let palette = GpuTexture::from_rgba8(
-            device,
-            queue,
-            PALETTE_SIDE,
-            PALETTE_SIDE,
-            &m.owner_palette(&world.country_colors),
-            false,
-            "palette",
+        ensure!(
+            scene.province_ids.len() == map_w as usize * map_h as usize,
+            "province_ids: {} элементов, ожидалось {}x{}",
+            scene.province_ids.len(),
+            map_w,
+            map_h
+        );
+        ensure!(
+            scene.palette.len() == (PALETTE_SIDE * PALETTE_SIDE * 4) as usize,
+            "palette: {} байт, ожидалось {}",
+            scene.palette.len(),
+            PALETTE_SIDE * PALETTE_SIDE * 4
         );
 
-        let font_path = cfg.find_font().context("не найден ни один шрифт (см. Config::font_candidates)")?;
-        let font = FontAtlas::load(device, queue, &font_path, cfg.font_px)?;
+        let tex_norm = GpuTexture::from_file(device, queue, &root.join("map/normal.bmp"), true)?;
+        let tex_height = GpuTexture::from_file_gray(device, queue, &root.join("map/heightmap.bmp"), true)?;
+        let tex_prov = GpuTexture::from_r16_uint(device, queue, map_w, map_h, scene.province_ids, "provinces");
+        let palette = GpuTexture::from_rgba8(device, queue, PALETTE_SIDE, PALETTE_SIDE, &scene.palette, false, "palette");
+
+        let font = FontAtlas::load(device, queue, scene.font_path, scene.font_px)?;
 
         let mut verts = Vec::new();
-        for l in &world.labels {
-            let w = font.measure(&l.name, l.size);
-            let origin = glam::Vec2::new(l.pos.x - w * 0.5, l.pos.y - 0.3 * font.px * l.size);
-            font.push_text(&mut verts, &l.name, origin, l.size);
+        for l in &scene.labels {
+            let w = font.measure(l.text, l.size);
+            let origin = Vec2::new(l.pos.x - w * 0.5, l.pos.y - 0.3 * font.px * l.size);
+            font.push_text(&mut verts, l.text, origin, l.size);
         }
         let labels = TextBatch::new(device, &verts);
 
@@ -279,12 +304,13 @@ impl Renderer {
             push_constant_ranges: &[],
         });
 
+        let (ww, wh) = (scene.world_size.x, scene.world_size.y);
         #[rustfmt::skip]
         let quad: [f32; 20] = [
-            0.0,         0.0,          0.0, 0.0, 0.0,
-            WORLD_WIDTH, 0.0,          0.0, 1.0, 0.0,
-            WORLD_WIDTH, WORLD_HEIGHT, 0.0, 1.0, 1.0,
-            0.0,         WORLD_HEIGHT, 0.0, 0.0, 1.0,
+            0.0, 0.0, 0.0, 0.0, 0.0,
+            ww,  0.0, 0.0, 1.0, 0.0,
+            ww,  wh,  0.0, 1.0, 1.0,
+            0.0, wh,  0.0, 0.0, 1.0,
         ];
         let indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
         let quad_vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -298,7 +324,7 @@ impl Renderer {
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        let fx = |n: &str| cfg.path(&format!("gfx/FX/{n}"));
+        let fx = |n: &str| root.join("gfx/FX").join(n);
         let mut map_file = ShaderFile::new(fx("map.wgsl"), fx("common.wgsl"), MAP_WGSL, COMMON_WGSL);
         let mut text_file = ShaderFile::new(fx("text.wgsl"), fx("common.wgsl"), TEXT_WGSL, COMMON_WGSL);
 
@@ -308,8 +334,23 @@ impl Renderer {
             .context("text.wgsl не скомпилировался (см. лог выше)")?;
 
         Ok(Self {
-            format, map_file, text_file, map_layout, text_layout, map_pipeline, text_pipeline,
-            frame_buf, frame_bg, map_bg, text_bg, quad_vb, quad_ib, labels, palette, last_poll: 0.0,
+            format,
+            world_size: scene.world_size,
+            map_file,
+            text_file,
+            map_layout,
+            text_layout,
+            map_pipeline,
+            text_pipeline,
+            frame_buf,
+            frame_bg,
+            map_bg,
+            text_bg,
+            quad_vb,
+            quad_ib,
+            labels,
+            palette,
+            last_poll: 0.0,
         })
     }
 
@@ -346,7 +387,7 @@ impl Renderer {
         let u = FrameUniform {
             view_proj: vp.to_cols_array_2d(),
             selected: sel,
-            params: [p.time, WORLD_WIDTH, 0.0, 0.0],
+            params: [p.time, self.world_size.x, 0.0, 0.0],
         };
         queue.write_buffer(&self.frame_buf, 0, bytemuck::bytes_of(&u));
 

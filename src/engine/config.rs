@@ -1,22 +1,21 @@
 use std::path::PathBuf;
 
-/// Аналог gameinfo.gi в Source 2: где лежит контент и какие настройки по умолчанию.
 #[derive(Clone)]
 pub struct Config {
     pub title: String,
     pub fullscreen: bool,
     pub width: u32,
     pub height: u32,
-    /// Корень контента. По умолчанию — папка, где лежит exe (как build/bin в C++ проекте).
+    pub vsync: bool,
+    pub fps_cap: Option<u32>,
     pub content_root: PathBuf,
     pub language: String,
     pub font_candidates: Vec<PathBuf>,
     pub font_px: f32,
 }
 
-/// Папка с exe. Можно переопределить переменной окружения AEGIS_CONTENT.
 fn default_root() -> PathBuf {
-    if let Some(p) = std::env::var_os("AEGIS_CONTENT") {
+    if let Some(p) = std::env::var_os("SUGURU_CONTENT") {
         return PathBuf::from(p);
     }
     std::env::current_exe()
@@ -28,10 +27,12 @@ fn default_root() -> PathBuf {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            title: "Aegis".into(),
+            title: "Suguru".into(),
             fullscreen: false,
             width: 1600,
             height: 900,
+            vsync: std::env::var("SUGURU_VSYNC").is_ok_and(|v| v == "1"),
+            fps_cap: std::env::var("SUGURU_FPS").ok().and_then(|v| v.parse().ok()).or(Some(300)),
             content_root: default_root(),
             language: "russian".into(),
             font_px: 64.0,
@@ -49,11 +50,6 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn path(&self, rel: &str) -> PathBuf {
-        self.content_root.join(rel)
-    }
-
-    /// 1) font/main.ttf и системные пути, 2) любой .ttf/.otf в папке font/ рядом с exe.
     pub fn find_font(&self) -> Option<PathBuf> {
         let direct = self
             .font_candidates

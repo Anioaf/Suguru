@@ -1,16 +1,18 @@
+mod fixed;
+mod hash;
 pub mod map;
 pub mod parsers;
+mod sim;
 pub mod world;
 
 use std::fmt;
 
+pub use sim::Command;
 pub use world::World;
 
-/// Размеры мира в мировых единицах (карта 5632×2048 px → 5.632×2.048).
 pub const WORLD_WIDTH: f32 = 5.632;
 pub const WORLD_HEIGHT: f32 = 2.048;
 
-/// Трехбуквенный тег страны (GER, SOV, ...). Copy, без аллокаций, быстро хэшируется.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct Tag([u8; 3]);
 

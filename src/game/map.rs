@@ -5,7 +5,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::Path;
 
 pub const NO_PROVINCE: u16 = u16::MAX;
-pub const PALETTE_SIDE: u32 = 256;
 
 pub struct CountryAnchor {
     pub tag: Tag,
@@ -110,11 +109,13 @@ impl MapData {
         self.owner.get(id as usize).copied().flatten()
     }
 
-    pub fn owner_palette(&self, colors: &FxHashMap<Tag, [u8; 3]>) -> Vec<u8> {
-        let mut out = vec![0u8; (PALETTE_SIDE * PALETTE_SIDE * 4) as usize];
+    pub fn owner_palette(&self, colors: &FxHashMap<Tag, [u8; 3]>, side: u32) -> Vec<u8> {
+        let mut out = vec![0u8; (side * side * 4) as usize];
         for (id, o) in self.owner.iter().enumerate() {
-            if let Some(c) = o.and_then(|t| colors.get(&t)) {
-                out[id * 4..id * 4 + 4].copy_from_slice(&[c[0], c[1], c[2], 255]);
+            let Some(c) = o.and_then(|t| colors.get(&t)) else { continue };
+            let i = id * 4;
+            if i + 4 <= out.len() {
+                out[i..i + 4].copy_from_slice(&[c[0], c[1], c[2], 255]);
             }
         }
         out

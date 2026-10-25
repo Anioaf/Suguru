@@ -10,9 +10,13 @@ pub struct Gfx {
 }
 
 impl Gfx {
-    pub fn new(window: Arc<Window>) -> Result<Self> {
+    pub fn new(window: Arc<Window>, vsync: bool) -> Result<Self> {
         let size = window.inner_size();
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::util::backend_bits_from_env().unwrap_or(wgpu::Backends::PRIMARY),
+            flags: wgpu::InstanceFlags::empty(),
+            ..Default::default()
+        });
         let surface = instance.create_surface(window)?;
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -27,7 +31,7 @@ impl Gfx {
 
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
-                label: Some("aegis device"),
+                label: Some("suguru device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
                 memory_hints: wgpu::MemoryHints::default(),
@@ -43,13 +47,19 @@ impl Gfx {
             .find(|f| !f.is_srgb())
             .unwrap_or(caps.formats[0]);
 
+        let present_mode = if vsync {
+            wgpu::PresentMode::AutoVsync
+        } else {
+            wgpu::PresentMode::AutoNoVsync
+        };
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width: size.width.max(1),
             height: size.height.max(1),
-            present_mode: wgpu::PresentMode::AutoVsync,
-            desired_maximum_frame_latency: 2,
+            present_mode,
+            desired_maximum_frame_latency: 1,
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
         };
